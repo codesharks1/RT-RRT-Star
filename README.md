@@ -1,4 +1,4 @@
-![image](https://github.com/codesharks1/RT-RRT-Star/assets/90197184/9adba42f-d1b9-437c-bec7-c57003fa1036)# RT-RRT-Star
+# RT-RRT-Star
 Reproduces RT-RT-STAR
 ## Instructions
 The red dot represents the end point
