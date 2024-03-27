@@ -10,7 +10,7 @@ import numpy as np
 from tqdm import *
 from plotting import *
 class RT_RRT_Star:
-    def __init__(self,pos_start,pos_goal,start_time,step_len,search_radius,goal_sample_rate,k_max,rs,max_iter,fig,ax,env,edges=[],vertex=[]):
+    def __init__(self,pos_start,pos_goal,start_time,step_len,search_radius,goal_sample_rate,k_max,rs,max_iter,fig,ax,env,time=0.5,edges=[],vertex=[],find_path = False):
         self.pos_start = Node(pos_start)
         self.pos_goal = Node(pos_goal)
         self.start_time = start_time
@@ -26,6 +26,7 @@ class RT_RRT_Star:
         self.obs_add = [0, 0, 0]
         self.edges = edges
         self.env = env
+        self.find_path = find_path
         self.utils = Utils(env)
         self.plotting = Plotting(pos_start,pos_goal)
         self.x_range = self.env.x_range
@@ -37,6 +38,7 @@ class RT_RRT_Star:
         self.qr = []
         self.qs = []
         self.waypoint = []
+        self.time = time
     def planning(self):
         i = 0
         if not self.vertex:
@@ -44,10 +46,10 @@ class RT_RRT_Star:
         start_ind = self.get_node_index_xy(self.pos_start.x,self.pos_start.y)
         if self.vertex[start_ind].parent:
             self.change_root(start_ind)
-        while time.time() - self.start_time < 0.5:
+        while time.time() - self.start_time < self.time:
             node_rand = self.generate_random_node(self.goal_sample_rate)
             node_near = self.nearest_neighbor(self.vertex, node_rand)
-            node_new = self.new_state(node_near, node_rand)
+            node_new = self.new_state(node_near,node_rand)
 
             if node_new and not self.utils.is_collision(node_near,node_new):
                 neighbor_index = self.find_near_neighbor(node_new)
@@ -58,8 +60,9 @@ class RT_RRT_Star:
                     self.qr.insert(0,node_new)
                 else:
                     self.qr.insert(0,node_near)
+
                 self.rewireRandomNode()
-            self.rewireRootNode()
+            self.rewireRootNode(start_ind)
             index = self.search_goal_parent()
             self.waypoint = self.extract_waypoint(self.vertex[index])
             self.generate_graph()
@@ -67,18 +70,38 @@ class RT_RRT_Star:
         index = self.search_goal_parent()
         self.waypoint = self.extract_path(self.vertex[index])
         next_ind = self.get_next_root_ind(self.waypoint)
-        return (self.pos_goal.x,self.pos_goal.y),self.vertex,self.edges,(self.vertex[next_ind].x,self.vertex[next_ind].y)
+        return (self.pos_goal.x,self.pos_goal.y),self.vertex,self.edges,(self.vertex[next_ind].x,self.vertex[next_ind].y),self.find_path
+    @staticmethod
+    def SampleUnitBall():
+        while True:
+            x, y = random.uniform(-1, 1), random.uniform(-1, 1)
+            if x ** 2 + y ** 2 < 1:
+                return np.array([[x], [y], [0.0]])
+    def Sample(self, c_max, c_min, x_center, C):
+        if c_max < np.inf:
+            r = [c_max / 2.0,
+                 math.sqrt(c_max ** 2 - c_min ** 2) / 2.0,
+                 math.sqrt(c_max ** 2 - c_min ** 2) / 2.0]
+            L = np.diag(r)
+
+            while True:
+                x_ball = self.SampleUnitBall()
+                x_rand = np.dot(np.dot(C, L), x_ball) + x_center
+                if self.x_range[0] + self.delta <= x_rand[0] <= self.x_range[1] - self.delta and \
+                        self.y_range[0] + self.delta <= x_rand[1] <= self.y_range[1] - self.delta:
+                    break
+            x_rand = Node((x_rand[(0, 0)], x_rand[(1, 0)]))
+        else:
+            x_rand = self.generate_random_node()
+
+        return x_rand
     def change_root(self, next_root_ind):
         current_root_ind = self.get_node_index_xy(self.vertex[next_root_ind].parent.x, self.vertex[next_root_ind].parent.y)
-        self.vertex[next_root_ind].parent =  None
+        self.vertex[next_root_ind].parent = None
         self.vertex[current_root_ind].parent = self.vertex[next_root_ind]
     def get_next_root_ind(self,path):
         next_ind = 0
-        if len(path) == 2:
-            next_root_x = path[1][0]
-            next_root_y = path[1][1]
-            next_ind = self.get_node_index_xy(next_root_x, next_root_y)
-        elif len(path) > 2:
+        if len(path) > 2:
             next_root_x = path[-2][0]
             next_root_y = path[-2][1]
             next_ind = self.get_node_index_xy(next_root_x, next_root_y)
@@ -165,12 +188,16 @@ class RT_RRT_Star:
         return path
     def search_goal_parent(self):
         dist_list = [math.hypot(n.x - self.pos_goal.x, n.y - self.pos_goal.y) for n in self.vertex]
-        node_index = [i for i in range(len(dist_list)) if dist_list[i] <= self.step_len]
+        node_index = [i for i in range(len(dist_list)) if dist_list[i] <= 1]
 
         if len(node_index) > 0:
+            self.find_path = True
             cost_list = [dist_list[i] + self.cost(self.vertex[i]) for i in node_index
                          if not self.utils.is_collision(self.vertex[i], self.pos_goal)]
-            return node_index[int(np.argmin(cost_list))]
+            if node_index[int(np.argmin(cost_list))]:
+                return node_index[int(np.argmin(cost_list))]
+            else:
+                raise ValueError("返回的是空的")
 
         return int(np.argmin(dist_list))
 
@@ -239,9 +266,9 @@ class RT_RRT_Star:
                     node_neighbor.parent = x_r
                     # x_r.child.append(node_neighbor)
                     self.qr.append(node_neighbor)
-    def rewireRootNode(self):
+    def rewireRootNode(self,start_index):
         if len(self.qs) == 0:
-            self.qs.append(self.pos_start)
+            self.qs.append(self.vertex[start_index])
         qs_popped = []
 
         while len(self.qs) != 0:
@@ -270,7 +297,6 @@ class RT_RRT_Star:
                 if node.flag == "INVALID" and len(path_index)!= 0:
                     for j in path_index:
                         self.vertex[j].flag = "INVALID"
-                    break
                 node = node.parent
                 path_index.append(i)
 
@@ -279,7 +305,7 @@ class RT_RRT_Star:
     def InvalidateNodes(self):
         for edge in self.edges:
             if self.is_collision_obs_add(edge.parent, edge.child):
-                edge.child.flag = "INVALID"
+                edge.parent.flag = "INVALID"
 
     def is_collision_obs_add(self, start, end):
         delta = self.utils.delta
@@ -328,12 +354,36 @@ def main():
     fig, ax = plt.subplots()
     env = Env()
     start_time = time.time()
-    rt_rrt = RT_RRT_Star(x_start,x_goal,start_time,3,3,0.1,10,10,5000,fig,ax,env)
-    goal_node,vertex,edges,next_node = rt_rrt.planning()
-    while time.time() - start_time < 60:
+    rt_rrt = RT_RRT_Star(x_start,x_goal,start_time,60,10,0.1,10,10,5000,fig,ax,env,10)
+    goal_node,vertex,edges,next_node,find_path = rt_rrt.planning()
+    acc_dist = 0
+    acc_time = time.time()
+    init_goal_node = goal_node
+    index = 0
+    goal_node_list = [(10, 24),(10,10),(50,10)]
+    while time.time() - start_time < 600:
         epoch_time = time.time()
-        rt_rrt = RT_RRT_Star(next_node, goal_node, epoch_time, 2, 3, 0.1, 10, 10, 5000,fig,ax,env,edges,vertex)
-        goal_node, vertex, edges, next_node = rt_rrt.planning()
+        # 算每一轮走过的距离
+        old_node = next_node
+        rt_rrt = RT_RRT_Star(next_node, goal_node, epoch_time, 60, 10, 0.1, 10, 10, 5000,fig,ax,env,0.5,edges,vertex,find_path)
+        goal_node, vertex, edges, next_node, find_path = rt_rrt.planning()
+        if goal_node[0]!= init_goal_node[0] and goal_node[1]!= init_goal_node[1]:
+            print("重置了")
+            init_goal_node = goal_node
+            acc_dist = 0
+            acc_time = time.time()
+        acc_dist = acc_dist + math.hypot(next_node[0] - old_node[0], next_node[1] - old_node[1])
+        # 到终点了
+        if find_path:
+            print(f"本轮路径规划结束，时间花费为{time.time() - acc_time}")
+            acc_time = time.time()
+        if math.hypot(next_node[0] - goal_node[0], next_node[1] - goal_node[1]) < 3:
+            print(f"路径长度是{acc_dist}")
+            if index < 3:
+                goal_node = goal_node_list[index]
+                index = index + 1
+                acc_dist = 0
+
 
 if __name__ == '__main__':
     main()
